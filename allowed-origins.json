@@ -1,0 +1,5 @@
+{
+  "http://wpbot.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTn2uXdK" },
+  "https://wpbot.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTn2uXdK" },
+  "https://tdpadmin.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTnksoru" }
+}
