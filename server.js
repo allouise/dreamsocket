@@ -30,6 +30,9 @@ function loadAllowedOrigins() {
         console.log("Allowed origins reloaded");
     } catch (err) {
         console.error("Failed to load origins:", err);
+        if (!Object.keys(allowedOriginsCache).length) {
+            allowedOriginsCache = {};
+        }
     }
 }
 
@@ -45,7 +48,7 @@ fs.watchFile(allowedOriginsPath, { interval: 1000 }, () => {
 const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {
-            const allowed = Object.keys(allowedOriginsCache());
+            const allowed = Object.keys(allowedOriginsCache);
     
             if (!origin || allowed.includes(normalizeOrigin(origin))) {
                 callback(null, true);
@@ -92,7 +95,7 @@ function writeLog(message) {
 }
 
 function validateToken(site, token) {
-    const allowedOrigins = allowedOriginsCache();
+    const allowedOrigins = allowedOriginsCache;
     const siteConfig = allowedOrigins[site];
     if (!siteConfig?.secret) return false;
 
@@ -136,7 +139,7 @@ let supportAgents = {};
 io.use((socket, next) => {
     const { token, site } = socket.handshake.auth || {};
     const origin = normalizeOrigin(socket.handshake.headers.origin);
-    const allowedOrigins = allowedOriginsCache();
+    const allowedOrigins = allowedOriginsCache;
     
     console.log("Incoming origin:", origin);
 
@@ -333,7 +336,7 @@ app.get("/status", (req, res) => {
         return res.status(400).json({ running: false, error: "Missing site or token" });
     }
 
-    const allowedOrigins = allowedOriginsCache();
+    const allowedOrigins = allowedOriginsCache;
     const siteData = allowedOrigins[site];
     if (!siteData) {
         return res.status(403).json({ running: false, error: "Site not allowed" });
