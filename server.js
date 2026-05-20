@@ -322,7 +322,14 @@ app.get("/", (req, res) => {
  * Health
  * ======================== */
 app.get("/health", (req, res) => {
-    res.status(200).send("OK");
+    res.status(200).json({
+        running: true,
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        memoryUsage: process.memoryUsage(),
+        activeSessions: sessions ? Object.keys(sessions).length : 0,
+        supportGroups: supportAgents ? Object.keys(supportAgents).length : 0
+    });
 });
 
 /* ========================
