@@ -1,5 +1,8 @@
 {
   "http://wpbot.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTn2uXdK" },
   "https://wpbot.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTn2uXdK" },
-  "https://tdpadmin.test": { "secret": "nH3Vdn0bvVpuQ1QLhqnH75yMBTnksoru" }
+  "https://outsourcing.technodreamcenter.com": { "secret": "Xy2u2luIsnQTv0VQdYsguNNH33MdjLsn" },
+  "https://webcreations.technodreamcenter.com": { "secret": "81FyRK4OlH86ORvgqE25Zx1dXWGpDVFk" },
+  "https://napervilleclassictowing.technodreamcenter.com": { "secret": "CuR3c38R043ksGV0mTrqoqpliz419C0w" },
+  "https://360youthservices.technodreamcenter.com": { "secret": "3o79cNi6jiev19sp79nBVCAcoVysywjh" }
 }
