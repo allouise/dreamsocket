@@ -8,8 +8,8 @@ const path = require("path");
 const app = express();
 app.set("trust proxy", 1);
 const server = http.createServer(app);
-/* const logFile = path.join(__dirname, "server.log"); */
-const originalLog = console.log;
+const logFile = path.join(__dirname, "server.log");
+/* const originalLog = console.log; */
 
 let allowedOriginsCache = {};
 const allowedOriginsPath = path.join(__dirname, "allowed-origins.json");
@@ -60,23 +60,23 @@ const io = new Server(server, {
     },
     path: "/socket.io"
 });
-console.log("ALL ENV:", process.env);
-console.log("ENV PORT:", process.env.PORT);
+/* console.log("ALL ENV:", process.env);
+console.log("ENV PORT:", process.env.PORT); */
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, "0.0.0.0", () => {
-    console.log("Socket server running on Passenger port:", PORT);
+    /* console.log("Socket server running on Passenger port:", PORT); */
 });
 
 console.log = (...args) => {
     const message = args.join(" ");
     writeLog(message);
-    originalLog.apply(console, args);
+    /* originalLog.apply(console, args); */
 };
 
 console.error = (...args) => {
     const message = args.join(" ");
     writeLog("ERROR: " + message);
-    originalLog.apply(console, args);
+    /* originalLog.apply(console, args); */
 };
 
 function normalizeOrigin(origin) {
@@ -84,14 +84,14 @@ function normalizeOrigin(origin) {
 }
 
 function writeLog(message) {
-    /* const timestamp = new Date().toISOString();
+    const timestamp = new Date().toISOString();
     fs.appendFile( logFile, `[${timestamp}] ${message}\n`,
         (err) => {
-            if (err) {
+            /* if (err) {
                 originalLog("Log write failed:", err);
-            }
+            } */
         }
-    ); */
+    );
 }
 
 function validateToken(site, token) {
@@ -122,7 +122,7 @@ function emitSupportStatus(site) {
 }
 
 io.engine.on("connection_error", (err) => {
-    console.log("ENGINE ERROR:", err.req, err.code, err.message, err.context);
+    console.error("ENGINE ERROR:", err.req, err.code, err.message, err.context);
 });
 
 /* ========================
@@ -141,19 +141,19 @@ io.use((socket, next) => {
     const origin = normalizeOrigin(socket.handshake.headers.origin);
     const allowedOrigins = allowedOriginsCache;
     
-    console.log("Incoming origin:", origin);
+    /* console.log("Incoming origin:", origin); */
 
     if (!origin || !allowedOrigins[origin]) {
-        console.log("Blocked origin:", origin);
+        console.error("Blocked origin:", origin);
         return next(new Error("Origin not allowed"));
     }
 
     if (!site || !token || !validateToken(site, token)) {
-        console.log("Unauthorized:", site);
+        console.error("Unauthorized:", site);
         return next(new Error("Unauthorized"));
     }
 
-    console.log("Allowed:", origin);
+    /* console.log("Allowed:", origin); */
     socket.site = site;
     next();
 });
@@ -164,7 +164,7 @@ io.use((socket, next) => {
 io.on("connection", (socket) => {
     const site = socket.site;
     socket.join(site);
-    console.log(`Client Connected: ${socket.id} (site: ${site})`);
+    /* console.log(`Client Connected: ${socket.id} (site: ${site})`); */
 
     /* ========================
      * SUPPORT STATUS
@@ -177,13 +177,13 @@ io.on("connection", (socket) => {
         supportAgents[site] = supportAgents[site] || new Map();
         supportAgents[site].set(socket.id, true);
         emitSupportStatus(site);
-        console.log(`site: ${site} | Support Registered | total: ${supportAgents[site]?.size}`);
+        /* console.log(`site: ${site} | Support Registered | total: ${supportAgents[site]?.size}`); */
     });
 
     socket.on("unregister-support", () => {
         supportAgents[site]?.delete(socket.id);
         emitSupportStatus(site);
-        console.log(`site: ${site} | Support Unregistered:`, supportAgents[site]?.size);
+        /* console.log(`site: ${site} | Support Unregistered:`, supportAgents[site]?.size); */
     });
     
     /* ========================
@@ -212,7 +212,7 @@ io.on("connection", (socket) => {
         const name = session.visitor_name;
         io.to(site).emit("new-session", { session_id, visitor_name: name });
         io.to(site).emit("active-sessions", getActiveSessions(site));
-        console.log(`site: ${site} | Visitor Joined | session: ${session_id} | name: ${name}`);
+        /* console.log(`site: ${site} | Visitor Joined | session: ${session_id} | name: ${name}`); */
     });
 
     /* ========================
@@ -222,7 +222,7 @@ io.on("connection", (socket) => {
         sessions[site] = sessions[site] || {};
         sessions[site][session_id] = sessions[site][session_id] || {};
         sessions[site][session_id].admin = socket;
-        console.log(`site: ${site} | Admin Joined Session:`, session_id);
+        /* console.log(`site: ${site} | Admin Joined Session:`, session_id); */
     });
 
     /* ========================
@@ -283,7 +283,7 @@ io.on("connection", (socket) => {
             online: supportAgents[site]?.size > 0
         });
         io.to(site).emit("active-sessions", getActiveSessions(site));
-        console.log(`site: ${site} | Disconnected:`, socket.id);
+        /* console.log(`site: ${site} | Disconnected:`, socket.id); */
     });
 
     /* ========================
@@ -294,7 +294,7 @@ io.on("connection", (socket) => {
             delete sessions[site][session_id];
         }
         io.to(site).emit("active-sessions", getActiveSessions(site));
-        console.log(`site: ${site} | Visitor Left | session: ${session_id}`);
+        /* console.log(`site: ${site} | Visitor Left | session: ${session_id}`); */
     });
 });
 module.exports = app;
