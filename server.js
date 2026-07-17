@@ -296,6 +296,25 @@ io.on("connection", (socket) => {
         io.to(site).emit("active-sessions", getActiveSessions(site));
         /* console.log(`site: ${site} | Visitor Left | session: ${session_id}`); */
     });
+
+    /* ========================
+     * End Chat
+     * ======================== */
+    socket.on("end-chat", ({ session_id }) => {
+        const session = sessions[site]?.[session_id];
+        if (!session) return;
+        /* Notify every visitor tab */
+        if (session.visitors) {
+            session.visitors.forEach(visitor => {
+                visitor.emit("chat-ended");
+            });
+        }
+        /* Remove the session */
+        delete sessions[site][session_id];
+        /* Refresh admin list */
+        io.to(site).emit("active-sessions", getActiveSessions(site));
+        /* console.log(`site: ${site} | Chat Ended | session: ${session_id}`); */
+    });
 });
 module.exports = app;
 
