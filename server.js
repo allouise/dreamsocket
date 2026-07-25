@@ -145,6 +145,15 @@ function validateToken(site, token) {
     return token === expected;
 }
 
+function isValidSessionId(sessionId) {
+    return (
+        typeof sessionId === "string" &&
+        sessionId.trim().length > 0 &&
+        sessionId !== "null" &&
+        sessionId !== "undefined"
+    );
+}
+
 function emitActiveSessions(site) {
     io.to(site).emit("active-sessions", getActiveSessions(site));
 }
@@ -153,9 +162,12 @@ function getActiveSessions(site) {
     return Object.entries(sessions[site] || {}).map(([session_id, data]) => ({
         session_id,
         visitor_name: data.visitor_name || session_id,
-        active: data.active ?? false
+        active: data.active ?? false,
+        start_datetime: data.start_datetime,
+        last_message_datetime: data.last_message_datetime
     }));
 }
+
 function emitSupportStatus(site) {
     io.to(site).emit("support-status", {
         online: supportAgents[site]?.size > 0
@@ -204,6 +216,11 @@ io.use((socket, next) => {
  * ======================== */
 io.on("connection", (socket) => {
 
+    /* log("Client connected:", socket.id);
+    socket.onAny((event, ...args) => {
+        log("EVENT:", event, args);
+    }); */
+
     const site = socket.site;
     socket.join(site);
     /* log(`Client Connected: ${socket.id} (site: ${site})`); */
@@ -233,10 +250,21 @@ io.on("connection", (socket) => {
      * accepts { session_id, visitor_name }
      * ======================== */
     socket.on("visitor-join", ({ session_id, visitor_name }) => {
+        if (!isValidSessionId(session_id)) return;
+
         sessions[site] = sessions[site] || {};
-        sessions[site][session_id] = sessions[site][session_id] || { messages: [] }; 
+        
+        const isNewSession = !sessions[site][session_id];
+        sessions[site][session_id] = sessions[site][session_id] || { 
+            messages: [],
+            start_datetime: new Date().toISOString()
+        }; 
 
         const session = sessions[site][session_id];
+        if (!session.last_message_datetime) {
+            session.last_message_datetime = session.start_datetime;
+        }
+
         session.visitors = session.visitors || new Set();
         session.visitors.add(socket);
         session.active = true;
@@ -248,11 +276,17 @@ io.on("connection", (socket) => {
         }
 
         if (session.messages?.length) {
-            session.messages?.forEach(msg => socket.emit("receive-message", msg));
+            session.messages.forEach(msg => socket.emit("receive-message", msg));
         }
 
         const name = session.visitor_name;
-        io.to(site).emit("new-session", { session_id, visitor_name: name });
+        io.to(site).emit("new-session", { 
+            session_id, 
+            visitor_name: name,
+            start_datetime: session.start_datetime,
+            last_message_datetime: session.last_message_datetime
+        });
+        
         emitActiveSessions(site);
         /* log(`site: ${site} | Visitor Joined | session: ${session_id} | name: ${name}`); */
     });
@@ -261,6 +295,8 @@ io.on("connection", (socket) => {
      * ADMIN JOINS SESSION
      * ======================== */
     socket.on("join-session", ({ session_id }) => {
+        if (!isValidSessionId(session_id)) return;
+
         sessions[site] = sessions[site] || {};
         sessions[site][session_id] = sessions[site][session_id] || {};
         sessions[site][session_id].admin = socket;
@@ -275,8 +311,11 @@ io.on("connection", (socket) => {
         const session = sessions[site]?.[session_id];
         if (!session) return;
 
+        const now = new Date().toISOString();
+        session.last_message_datetime = now;
+
         if (sender === "admin") {
-            const msg = { ...data };
+            const msg = { ...data, timestamp: now };
             session.messages = session.messages || [];
             if (session.visitors && session.visitors.size > 0) {
                 session.visitors.forEach(v => {
@@ -288,8 +327,10 @@ io.on("connection", (socket) => {
         }
 
         if (sender === "visitor" && session.admin) {
-            session.admin.emit("receive-message", data);
+            session.admin.emit("receive-message", { ...data, timestamp: now });
         }
+
+        emitActiveSessions(site);
     });
 
     /* ========================
@@ -326,17 +367,6 @@ io.on("connection", (socket) => {
         });
         emitActiveSessions(site);
         /* log(`site: ${site} | Disconnected:`, socket.id); */
-    });
-
-    /* ========================
-     * GUEST RESTARTS CHAT BACK TO BOT
-     * ======================== */
-    socket.on("restarted-leave", ({ session_id }) => {
-        if (sessions[site]?.[session_id]) {
-            delete sessions[site][session_id];
-        }
-        emitActiveSessions(site);
-        log(`site: ${site} | Visitor Left | session: ${session_id}`);
     });
 
     /* ========================
