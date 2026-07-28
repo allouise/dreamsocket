@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-app.set("trust proxy", 1);
+/* app.set("trust proxy", 1); */
 const server = http.createServer(app);
 const logFile = path.join(__dirname, "server.log");
 
@@ -45,6 +45,7 @@ fs.watchFile(allowedOriginsPath, { interval: 1000 }, () => {
 });
 
 const io = new Server(server, {
+    transports: ["websocket"],
     cors: {
         origin: (origin, callback) => {
             const allowed = Object.keys(allowedOriginsCache);
@@ -175,6 +176,7 @@ function emitSupportStatus(site) {
 }
 
 io.engine.on("connection_error", (err) => {
+    if (err.code === 1) return;
     logError( "ENGINE ERROR:", err.code, err.message, err.context );
 });
 
@@ -216,10 +218,10 @@ io.use((socket, next) => {
  * ======================== */
 io.on("connection", (socket) => {
 
-    /* log("Client connected:", socket.id);
+    log("Client connected:", socket.id);
     socket.onAny((event, ...args) => {
         log("EVENT:", event, args);
-    }); */
+    });
 
     const site = socket.site;
     socket.join(site);
