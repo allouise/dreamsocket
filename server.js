@@ -45,7 +45,7 @@ fs.watchFile(allowedOriginsPath, { interval: 1000 }, () => {
 });
 
 const io = new Server(server, {
-    transports: ["websocket"],
+    transports: ["websocket","polling"],
     cors: {
         origin: (origin, callback) => {
             const allowed = Object.keys(allowedOriginsCache);
