@@ -6,18 +6,29 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-/* app.set("trust proxy", 1); */
+app.set("trust proxy", 1);
 const server = http.createServer(app);
 const logFile = path.join(__dirname, "server.log");
 
 let allowedOriginsCache = {};
 const allowedOriginsPath = path.join(__dirname, "allowed-origins.json");
+
+/* ========================
+ * Cache & Utilities
+ * ======================== */
+function normalizeOrigin(origin) {
+    if (!origin) return "";
+    try {
+        const parsed = new URL(origin);
+        return parsed.origin;
+    } catch {
+        return origin.replace(/\/$/, "");
+    }
+}
+
 function loadAllowedOrigins() {
     try {
-        const data = fs.readFileSync(
-            allowedOriginsPath,
-            "utf-8"
-        );
+        const data = fs.readFileSync(allowedOriginsPath, "utf-8");
         const parsed = JSON.parse(data);
         const normalized = {};
 
@@ -35,21 +46,22 @@ function loadAllowedOrigins() {
     }
 }
 
-/* Initial Load */
+/* Initial Load & File Watcher */
 loadAllowedOrigins();
-
-/* Auto Reload When File Changes */
 fs.watchFile(allowedOriginsPath, { interval: 1000 }, () => {
     log("allowed-origins.json changed", true);
     loadAllowedOrigins();
 });
 
+/* ========================
+ * Socket.IO Configuration
+ * ======================== */
 const io = new Server(server, {
-    transports: ["websocket","polling"],
+    transports: ["websocket", "polling"],
     cors: {
         origin: (origin, callback) => {
             const allowed = Object.keys(allowedOriginsCache);
-    
+            // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
             if (!origin || allowed.includes(normalizeOrigin(origin))) {
                 callback(null, true);
             } else {
@@ -60,86 +72,24 @@ const io = new Server(server, {
     },
     path: "/socket.io"
 });
-/* log("ALL ENV:", process.env);
-log("ENV PORT:", process.env.PORT); */
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, "0.0.0.0", () => {
-    log("Socket server running on Passenger port:", PORT);
+    log("Socket server running on port:", PORT);
 });
 
-function log(...args) {
-    let saveToFile = false;
-    if (typeof args[args.length - 1] === "boolean") saveToFile = args.pop();
-    console.log(...args);
-    if (!saveToFile) return;
-    const message = args.map(arg => {
-        if (typeof arg === "object") {
-            try {
-                return JSON.stringify(arg);
-            } catch {
-                return String(arg);
-            }
-        }
-
-        return String(arg);
-    }).join(" ");
-    writeLog(message);
-}
-
-function logError(...args) {
-    console.error(...args);
-    const message = args.map(arg => {
-        if (arg instanceof Error) {
-            return arg.stack;
-        }
-        if (typeof arg === "object") {
-            try {
-                return JSON.stringify(arg);
-            } catch {
-                return String(arg);
-            }
-        }
-        return String(arg);
-    }).join(" ");
-    writeLog("ERROR: " + message);
-}
-
-function normalizeOrigin(origin) {
-    return origin?.replace(/\/$/, "");
-}
-
-function writeLog(message) {
-    const timestamp = new Date().toISOString();
-
-    if (typeof message === "object") {
-        try {
-            message = JSON.stringify(message);
-        } catch {
-            message = String(message);
-        }
-    }
-
-    fs.appendFile(
-        logFile,
-        `[${timestamp}] ${message}\n`,
-        err => {
-            if (err) {
-                process.stderr.write(
-                    `[${timestamp}] Failed to write log: ${err.message}\n`
-                );
-            }
-        }
-    );
-}
+/* ========================
+ * State Management
+ * ======================== */
+let sessions = {};        // { site: { session_id: { messages: [], active: bool, ... } } }
+let supportAgents = {};   // { site: Set(socket.id) }
 
 function validateToken(site, token) {
-    const allowedOrigins = allowedOriginsCache;
-    const siteConfig = allowedOrigins[site];
+    const siteConfig = allowedOriginsCache[site];
     if (!siteConfig?.secret) return false;
 
-    const combinedSecret = siteConfig.secret;
     const expected = crypto
-        .createHmac("sha256", combinedSecret)
+        .createHmac("sha256", siteConfig.secret)
         .update(site)
         .digest("hex");
 
@@ -155,10 +105,6 @@ function isValidSessionId(sessionId) {
     );
 }
 
-function emitActiveSessions(site) {
-    io.to(site).emit("active-sessions", getActiveSessions(site));
-}
-
 function getActiveSessions(site) {
     return Object.entries(sessions[site] || {}).map(([session_id, data]) => ({
         session_id,
@@ -169,107 +115,112 @@ function getActiveSessions(site) {
     }));
 }
 
+function emitActiveSessions(site) {
+    io.to(`site:${site}`).emit("active-sessions", getActiveSessions(site));
+}
+
 function emitSupportStatus(site) {
-    io.to(site).emit("support-status", {
-        online: supportAgents[site]?.size > 0
+    const isOnline = (supportAgents[site]?.size || 0) > 0;
+    io.to(`site:${site}`).emit("support-status", { online: isOnline });
+}
+
+/* ========================
+ * Logging Helpers
+ * ======================== */
+function log(...args) {
+    let saveToFile = false;
+    if (typeof args[args.length - 1] === "boolean") saveToFile = args.pop();
+    console.log(...args);
+    if (!saveToFile) return;
+
+    const message = args.map(arg => (typeof arg === "object" ? JSON.stringify(arg) : String(arg))).join(" ");
+    writeLog(message);
+}
+
+function logError(...args) {
+    console.error(...args);
+    const message = args.map(arg => (arg instanceof Error ? arg.stack : typeof arg === "object" ? JSON.stringify(arg) : String(arg))).join(" ");
+    writeLog("ERROR: " + message);
+}
+
+function writeLog(message) {
+    const timestamp = new Date().toISOString();
+    fs.appendFile(logFile, `[${timestamp}] ${message}\n`, err => {
+        if (err) process.stderr.write(`[${timestamp}] Failed to write log: ${err.message}\n`);
     });
 }
 
 io.engine.on("connection_error", (err) => {
-    if (err.code === 1) return;
-    logError( "ENGINE ERROR:", err.code, err.message, err.context );
+    if (err.code === 1) return; // Transport closed code
+    logError("ENGINE ERROR:", err.code, err.message, err.context);
 });
 
 /* ========================
- * State
- * Sessions = { site: { session_id: { visitor, admin } } }
- * supportAgents = { site: Map() }
- * ======================== */
-let sessions = {};
-let supportAgents = {};
-
-/* ========================
- * Authenticate
+ * Authentication Middleware
  * ======================== */
 io.use((socket, next) => {
     const { token, site } = socket.handshake.auth || {};
-    const origin = normalizeOrigin(socket.handshake.headers.origin);
-    const allowedOrigins = allowedOriginsCache;
-    
-    /* log("Incoming origin:", origin); */
+    const rawOrigin = socket.handshake.headers.origin || socket.handshake.headers.referer;
+    const origin = rawOrigin ? normalizeOrigin(rawOrigin) : null;
 
-    if (!origin || !allowedOrigins[origin]) {
+    // Check origin only if header is explicitly provided
+    if (origin && !allowedOriginsCache[origin]) {
         logError("Blocked origin:", origin);
         return next(new Error("Origin not allowed"));
     }
 
     if (!site || !token || !validateToken(site, token)) {
-        logError("Unauthorized:", site);
+        logError("Unauthorized site/token:", site);
         return next(new Error("Unauthorized"));
     }
 
-    /* log("Allowed:", origin); */
     socket.site = site;
     next();
 });
 
 /* ========================
- * Socket logic
+ * Socket Logic
  * ======================== */
 io.on("connection", (socket) => {
-
-    log("Client connected:", socket.id);
-    socket.onAny((event, ...args) => {
-        log("EVENT:", event, args);
-    });
-
     const site = socket.site;
-    socket.join(site);
-    /* log(`Client Connected: ${socket.id} (site: ${site})`); */
 
-    /* ========================
-     * SUPPORT STATUS
-     * ======================== */
+    // Join site-wide room for site-level broadcasts
+    socket.join(`site:${site}`);
+    log("Client connected:", socket.id, "Site:", site);
+
+    /* --- Support Status --- */
     socket.emit("support-status", {
-        online: supportAgents[site]?.size > 0
+        online: (supportAgents[site]?.size || 0) > 0
     });
-    
+
     socket.on("register-support", () => {
-        supportAgents[site] = supportAgents[site] || new Map();
-        supportAgents[site].set(socket.id, true);
+        supportAgents[site] = supportAgents[site] || new Set();
+        supportAgents[site].add(socket.id); // Store socket.id string (no memory leak)
         emitSupportStatus(site);
-        /* log(`site: ${site} | Support Registered | total: ${supportAgents[site]?.size}`); */
     });
 
     socket.on("unregister-support", () => {
         supportAgents[site]?.delete(socket.id);
         emitSupportStatus(site);
-        /* log(`site: ${site} | Support Unregistered:`, supportAgents[site]?.size); */
     });
-    
-    /* ========================
-     * VISITOR JOIN
-     * accepts { session_id, visitor_name }
-     * ======================== */
+
+    /* --- Visitor Join --- */
     socket.on("visitor-join", ({ session_id, visitor_name }) => {
         if (!isValidSessionId(session_id)) return;
 
         sessions[site] = sessions[site] || {};
-        
         const isNewSession = !sessions[site][session_id];
-        sessions[site][session_id] = sessions[site][session_id] || { 
+
+        sessions[site][session_id] = sessions[site][session_id] || {
             messages: [],
             start_datetime: new Date().toISOString()
-        }; 
+        };
 
         const session = sessions[site][session_id];
+        session.active = true;
         if (!session.last_message_datetime) {
             session.last_message_datetime = session.start_datetime;
         }
-
-        session.visitors = session.visitors || new Set();
-        session.visitors.add(socket);
-        session.active = true;
 
         if (visitor_name?.trim()) {
             session.visitor_name = visitor_name.trim();
@@ -277,37 +228,34 @@ io.on("connection", (socket) => {
             session.visitor_name = session_id;
         }
 
+        // Tag socket with session details & join room
+        socket.sessionId = session_id;
+        socket.join(`session:${site}:${session_id}`);
+
+        // Replay history to newly joined/reconnected client
         if (session.messages?.length) {
             session.messages.forEach(msg => socket.emit("receive-message", msg));
         }
 
-        const name = session.visitor_name;
-        io.to(site).emit("new-session", { 
-            session_id, 
-            visitor_name: name,
+        io.to(`site:${site}`).emit("new-session", {
+            session_id,
+            visitor_name: session.visitor_name,
             start_datetime: session.start_datetime,
             last_message_datetime: session.last_message_datetime
         });
-        
+
         emitActiveSessions(site);
-        /* log(`site: ${site} | Visitor Joined | session: ${session_id} | name: ${name}`); */
     });
 
-    /* ========================
-     * ADMIN JOINS SESSION
-     * ======================== */
+    /* --- Admin Join Session --- */
     socket.on("join-session", ({ session_id }) => {
         if (!isValidSessionId(session_id)) return;
-
-        sessions[site] = sessions[site] || {};
-        sessions[site][session_id] = sessions[site][session_id] || {};
-        sessions[site][session_id].admin = socket;
-        /* log(`site: ${site} | Admin Joined Session:`, session_id); */
+        
+        socket.sessionId = session_id;
+        socket.join(`session:${site}:${session_id}`);
     });
 
-    /* ========================
-     * MESSAGES
-     * ======================== */
+    /* --- Messaging --- */
     socket.on("send-message", (data) => {
         const { session_id, message, sender } = data;
         const session = sessions[site]?.[session_id];
@@ -316,84 +264,56 @@ io.on("connection", (socket) => {
         const now = new Date().toISOString();
         session.last_message_datetime = now;
 
-        if (sender === "admin") {
-            const msg = { ...data, timestamp: now };
-            session.messages = session.messages || [];
-            if (session.visitors && session.visitors.size > 0) {
-                session.visitors.forEach(v => {
-                    v.emit("receive-message", msg);
-                });
-            } else {
-                session.messages.push(msg);
-            }
-        }
+        const msgPayload = { ...data, timestamp: now };
 
-        if (sender === "visitor" && session.admin) {
-            session.admin.emit("receive-message", { ...data, timestamp: now });
-        }
+        // Append to session history buffer
+        session.messages = session.messages || [];
+        session.messages.push(msgPayload);
+
+        // Broadcast to room (delivers to visitor & admin transparently)
+        io.to(`session:${site}:${session_id}`).emit("receive-message", msgPayload);
 
         emitActiveSessions(site);
     });
 
-    /* ========================
-     * ACTIVE SESSIONS REQUEST
-     * Returns array of { session_id, visitor_name }
-     * ======================== */
     socket.on("get-active-sessions", () => {
         socket.emit("active-sessions", getActiveSessions(site));
     });
 
-    /* ========================
-     * DISCONNECT
-     * ======================== */
-    socket.on("disconnect", () => {
-        supportAgents[site]?.delete(socket.id);
-        if (sessions[site]) {
-            Object.keys(sessions[site]).forEach(sid => {
-                const session = sessions[site][sid];
-                if (session?.visitors?.has(socket)) {
-                    session.visitors.delete(socket);
-
-                    // Only mark inactive if ALL tabs are closed
-                    if (session.visitors.size === 0) {
-                        session.active = false;
-                    }
-                }
-                if (session?.admin === socket) {
-                    session.admin = null;
-                }
-            });
-        }
-        io.to(site).emit("support-status", {
-            online: supportAgents[site]?.size > 0
-        });
+    /* --- End Chat --- */
+    socket.on("end-chat", ({ session_id }) => {
+        const room = `session:${site}:${session_id}`;
+        io.to(room).emit("chat-ended");
+        
+        delete sessions[site]?.[session_id];
         emitActiveSessions(site);
-        /* log(`site: ${site} | Disconnected:`, socket.id); */
     });
 
-    /* ========================
-     * End Chat
-     * ======================== */
-    socket.on("end-chat", ({ session_id }) => {
-        const session = sessions[site]?.[session_id];
-        if (!session) return;
-        /* Notify every visitor tab */
-        if (session.visitors) {
-            session.visitors.forEach(visitor => {
-                visitor.emit("chat-ended");
-            });
+    /* --- Disconnect Handler --- */
+    socket.on("disconnect", () => {
+        // Clean up support agent tracking
+        if (supportAgents[site]?.has(socket.id)) {
+            supportAgents[site].delete(socket.id);
+            emitSupportStatus(site);
         }
-        /* Remove the session */
-        delete sessions[site][session_id];
-        /* Refresh admin list */
+
+        // Check active count in visitor room to set active status accurately
+        if (socket.sessionId && sessions[site]?.[socket.sessionId]) {
+            const roomName = `session:${site}:${socket.sessionId}`;
+            const roomSockets = io.sockets.adapter.rooms.get(roomName);
+            
+            // Mark session inactive if no sockets remain in room
+            if (!roomSockets || roomSockets.size === 0) {
+                sessions[site][socket.sessionId].active = false;
+            }
+        }
+
         emitActiveSessions(site);
-        /* log(`site: ${site} | Chat Ended | session: ${session_id}`); */
     });
 });
-module.exports = app;
 
 /* ========================
- * Home
+ * HTTP Routes
  * ======================== */
 app.get("/", (req, res) => {
     res.send(`
@@ -401,19 +321,17 @@ app.get("/", (req, res) => {
     <head>
         <title>Dreamdesk Socket</title>
         <style>
-        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #121212; font-family: 'Arial', sans-serif; } .shadow-dance-text { font-size: 4rem; color: #fff; text-shadow: 5px 5px 0 #5cedff, 10px 10px 0 #00d4ff; animation: shadow-dance 2s infinite; } @keyframes shadow-dance { 0%, 100% { text-shadow: 5px 5px 0 #5cedff, 10px 10px 0 #00d4ff; } 50% { text-shadow: -5px -5px 0 #00d4ff, -10px -10px 0 #5cedff; } }
+            body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #121212; font-family: sans-serif; } 
+            .shadow-dance-text { font-size: 4rem; color: #fff; text-shadow: 5px 5px 0 #5cedff, 10px 10px 0 #00d4ff; }
         </style>
     </head>
     <body>
-    <div class="shadow-dance-container"><h1 class="shadow-dance-text">Dream Socket</h1></div>
+        <div class="shadow-dance-container"><h1 class="shadow-dance-text">Dream Socket</h1></div>
     </body>
     </html>
     `);
 });
 
-/* ========================
- * Health
- * ======================== */
 app.get("/health", (req, res) => {
     res.status(200).json({
         running: true,
@@ -425,9 +343,6 @@ app.get("/health", (req, res) => {
     });
 });
 
-/* ========================
- * Get Quick Status
- * ======================== */
 app.get("/status", (req, res) => {
     const site = req.query.site;
     const token = req.query.token;
@@ -436,8 +351,7 @@ app.get("/status", (req, res) => {
         return res.status(400).json({ running: false, error: "Missing site or token" });
     }
 
-    const allowedOrigins = allowedOriginsCache;
-    const siteData = allowedOrigins[site];
+    const siteData = allowedOriginsCache[site];
     if (!siteData) {
         return res.status(403).json({ running: false, error: "Site not allowed" });
     }
@@ -453,3 +367,5 @@ app.get("/status", (req, res) => {
 
     res.json({ running: true, onlineSupport: Object.keys(sessions[site] || {}).length });
 });
+
+module.exports = app;
